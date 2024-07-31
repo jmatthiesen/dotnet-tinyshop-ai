@@ -1,0 +1,98 @@
+﻿@page "/chat"
+@using DataEntities
+@using Store.Services
+@inject ProductService ProductService
+@inject IConfiguration Configuration
+@inject IJSRuntime JS
+@attribute [StreamRendering(true)]
+
+<PageTitle>Products</PageTitle>
+
+<h1>Chat</h1>
+
+<p>Got a question, just ask!</p>
+
+<div class="messages-scroller">
+    <div class="messages">
+        <ChatMessage State="@(new MessageState(IsAssistant: true, Text: "Hi, I'm a helpful assistant, how may I assist you?", CancellationToken.None))" />
+        @for (var i = 0; i < messages.Count; i++)
+        {
+            var id = $"message{i}";
+            var state = messages[i]!;
+            <ChatMessage @key="@id" State="@state" />
+        }
+    </div>
+</div>
+
+<form class="write-message" @ref="@writeMessageElement" @onsubmit="@SendMessage">
+    <textarea @bind="@userMessageText" Placeholder="Ask the AI assistant" style="width: 100%; height: 100%;" />
+    <button type="submit">Send</button>
+</form>
+
+@code {
+    List<MessageState> messages = new();
+    ElementReference writeMessageElement;
+    string? userMessageText;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        Console.WriteLine("OnAfterRenderAsync");
+        if (firstRender)
+        {
+            try
+            {
+                await using var module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat.razor.js");
+                await module.InvokeVoidAsync("submitOnEnter", writeMessageElement);
+            }
+            catch (JSDisconnectedException)
+            {
+                // Not an error
+            }
+        }
+    }
+
+    void SendMessage()
+    {
+        if (!string.IsNullOrWhiteSpace(userMessageText))
+        {
+            StopResponding();
+
+            // Add the user's message to the UI
+            messages.Add(new MessageState(IsAssistant: false, Text:userMessageText, CancellationToken.None));
+            userMessageText = null;
+
+            // Submit request to backend
+            @* currentReplyCancellationTokenSource = new CancellationTokenSource(); *@
+            
+
+            // Add the assistant's reply to the UI
+            var reply = new MessageState(IsAssistant: true, Text: string.Empty, CancellationToken.None );
+            messages.Add(reply);
+        }
+    }
+
+    private void HandleResponseCompleted(MessageState state)
+    {
+        @* if (messages.LastOrDefault() == state)
+        {
+            currentReplyCancellationTokenSource = null;
+        } *@
+
+        // If it was cancelled before the response started, remove the message entirely
+        // But if there was some text already, keep it
+        if (string.IsNullOrEmpty(state.Text))
+        {
+            messages.Remove(state);
+        }
+    }
+
+    private void StopResponding()
+    {
+        @* currentReplyCancellationTokenSource?.Cancel(); *@
+    }
+
+    public record MessageState(
+        bool IsAssistant,
+        string Text, 
+        CancellationToken CancellationToken);
+}
