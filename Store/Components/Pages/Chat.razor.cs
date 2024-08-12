@@ -7,6 +7,8 @@ using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.Memory;
 using Microsoft.SemanticKernel.Text;
 using System.Text;
+using Microsoft.SemanticKernel;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 
 namespace Store.Components.Pages
 {
@@ -29,6 +31,7 @@ namespace Store.Components.Pages
             {
                 memory = new MemoryBuilder()
                     .WithMemoryStore(new VolatileMemoryStore())
+                    .WithLoggerFactory(LoggerFactory.Create(c => c.AddConsole().SetMinimumLevel(LogLevel.Trace)))
                     .WithOpenAITextEmbeddingGeneration("text-embedding-3-small", openAIKey)
                     .Build();
 
@@ -39,17 +42,18 @@ namespace Store.Components.Pages
                     string descriptionForEmbedding = $"Name: {product.Name} Description: {product.Description} Price: {product.Price}";
                     await memory.SaveInformationAsync(collectionName, descriptionForEmbedding, product.Id.ToString());
                 }
+
+                try
+                {
+                    await using var module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat.razor.js");
+                    await module.InvokeVoidAsync("submitOnEnter", writeMessageElement);
+                }
+                catch (JSDisconnectedException)
+                {
+                    // Not an error
+                }
             }
 
-            try
-            {
-                await using var module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat.razor.js");
-                await module.InvokeVoidAsync("submitOnEnter", writeMessageElement);
-            }
-            catch (JSDisconnectedException)
-            {
-                // Not an error
-            }
         }
 
         async void SendMessage()
@@ -58,7 +62,11 @@ namespace Store.Components.Pages
             {
                 string model = "gpt-3.5-turbo";
 
-                OpenAIChatCompletionService service = new OpenAIChatCompletionService(model, openAIKey);
+                IKernelBuilder kb = Kernel.CreateBuilder();
+                kb.AddOpenAIChatCompletion(model, openAIKey);
+                kb.Services.AddLogging(c => c.AddConsole().SetMinimumLevel(LogLevel.Trace));
+
+                Kernel kernel = kb.Build();
 
                 if (chatHistory == null)
                 {
@@ -76,7 +84,7 @@ namespace Store.Components.Pages
 
                 StringBuilder builder = new StringBuilder();
 
-                await foreach (var result in memory.SearchAsync("products", userMessageText, limit: 3))
+                await foreach (var result in memory.SearchAsync("products", userMessageText, limit: 3, minRelevanceScore: 0.4))
                 {
                     Console.WriteLine("Running");
                     builder.AppendLine(result.Metadata.Text);
@@ -85,7 +93,7 @@ namespace Store.Components.Pages
                 if (builder.Length > 0)
                 {
                     builder.Insert(0, "Answer questions using the following catalog items:");
-                    builder.AppendLine();
+                    builder.AppendLine("When asked about specific products, provide a summary of the product name, description, and price.");
                 }
                 builder.AppendLine(userMessageText);
 
@@ -96,7 +104,8 @@ namespace Store.Components.Pages
                 userMessageText = null;
 
                 // Submit request to backend
-                var response = await service.GetChatMessageContentAsync(
+                var ai = kernel.GetRequiredService<IChatCompletionService>();
+                var response = await ai.GetChatMessageContentAsync(
                     chatHistory, new OpenAIPromptExecutionSettings() { MaxTokens = 400 });
                 chatHistory.Add(response);
 
